@@ -196,36 +196,49 @@ public class MainActivity extends Activity {
      * لا نفحص SIZE.
      * RESULT_OK يعني أن التصوير تم بنجاح.
      */
-    @Override
-    protected void onActivityResult(
-            int requestCode,
-            int resultCode,
-            Intent data) {
+   @Override
+protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    super.onActivityResult(requestCode, resultCode, data);
 
-        super.onActivityResult(
-                requestCode,
-                resultCode,
-                data
-        );
-
-        if (requestCode != REQ_TAKE_PHOTO) {
-            return;
-        }
-
-        // الصورة تم التقاطها بنجاح
-        if (resultCode == RESULT_OK
-                && pendingUri != null) {
-
-            showNameScreen();
-            return;
-        }
-
-        // المستخدم ألغى الكاميرا
-        deletePendingPhoto();
-
-        showCameraScreen();
+    if (requestCode != REQ_TAKE_PHOTO) {
+        return;
     }
 
+    if (pendingUri == null) {
+        showCameraScreen();
+        return;
+    }
+
+    // نعطي تطبيق الكاميرا وقتًا قصيرًا لإنهاء كتابة الصورة
+    new Handler(getMainLooper()).postDelayed(() -> {
+
+        boolean photoExists = false;
+
+        try {
+            android.os.ParcelFileDescriptor pfd =
+                    getContentResolver().openFileDescriptor(pendingUri, "r");
+
+            if (pfd != null) {
+                long size = pfd.getStatSize();
+                pfd.close();
+
+                photoExists = size > 0;
+            }
+
+        } catch (Exception ignored) {
+        }
+
+        if (photoExists) {
+            // الصورة موجودة فعليًا
+            showNameScreen();
+        } else {
+            // فعلًا لم يتم التقاط صورة
+            deletePendingPhoto();
+            showCameraScreen();
+        }
+
+    }, 500);
+}
     /*
      * شاشة تسمية الصورة
      */
