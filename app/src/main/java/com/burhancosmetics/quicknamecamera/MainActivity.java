@@ -98,11 +98,7 @@ public class MainActivity extends Activity {
                     "photo_" + System.currentTimeMillis() + ".jpg"
             );
 
-            pendingUri = FileProvider.getUriForFile(
-                    this,
-                    getPackageName() + ".fileprovider",
-                    pendingFile
-            );
+          pendingUri = Uri.fromFile(pendingFile);
 
             Intent cameraIntent =
                     new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
