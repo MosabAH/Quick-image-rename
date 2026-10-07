@@ -533,7 +533,8 @@ public class MainActivity extends Activity {
     }
 
     /*
-     * منع تكرار أسماء الصور
-     *
-     * مثال:
-     * chair
+ * مثال:
+ * chair.jpg
+ * chair_01.jpg
+ * chair_02.jpg
+ */
