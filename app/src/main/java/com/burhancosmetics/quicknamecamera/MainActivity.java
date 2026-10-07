@@ -1,7 +1,6 @@
 package com.burhancosmetics.quicknamecamera;
 
 import android.Manifest;
-import androidx.activity.ComponentActivity;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -20,6 +19,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
+import androidx.activity.ComponentActivity;
 import androidx.annotation.NonNull;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageCapture;
@@ -29,9 +29,9 @@ import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
 
-
 import com.google.common.util.concurrent.ListenableFuture;
 
+import java.util.Locale;
 import java.util.concurrent.Executor;
 
 public class MainActivity extends ComponentActivity {
@@ -40,12 +40,10 @@ public class MainActivity extends ComponentActivity {
 
     private PreviewView previewView;
     private ImageCapture imageCapture;
+    private ProcessCameraProvider cameraProvider;
 
     private Uri pendingUri;
-
     private EditText nameBox;
-
-    private ProcessCameraProvider cameraProvider;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -88,27 +86,30 @@ public class MainActivity extends ComponentActivity {
 
                 Toast.makeText(
                         this,
-                        "يجب السماح باستخدام الكاميرا",
+                        "يجب السماح للتطبيق باستخدام الكاميرا",
                         Toast.LENGTH_LONG
                 ).show();
             }
         }
     }
 
-    // ==========================
+    // =====================================================
     // شاشة الكاميرا
-    // ==========================
+    // =====================================================
 
     private void showCamera() {
 
         hideKeyboard();
 
         LinearLayout root = new LinearLayout(this);
-
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
 
         previewView = new PreviewView(this);
+
+        previewView.setScaleType(
+                PreviewView.ScaleType.FILL_CENTER
+        );
 
         root.addView(
                 previewView,
@@ -134,11 +135,10 @@ public class MainActivity extends ComponentActivity {
 
         setContentView(root);
 
+        // لا نسمح بالتصوير قبل أن تصبح الكاميرا جاهزة
         captureButton.setEnabled(false);
 
-        startCamera(() -> {
-            captureButton.setEnabled(true);
-        });
+        startCamera(() -> captureButton.setEnabled(true));
 
         captureButton.setOnClickListener(v -> {
 
@@ -148,11 +148,11 @@ public class MainActivity extends ComponentActivity {
         });
     }
 
-    // ==========================
+    // =====================================================
     // تشغيل CameraX
-    // ==========================
+    // =====================================================
 
-    private void startCamera(Runnable ready) {
+    private void startCamera(Runnable cameraReady) {
 
         ListenableFuture<ProcessCameraProvider> future =
                 ProcessCameraProvider.getInstance(this);
@@ -184,19 +184,19 @@ public class MainActivity extends ComponentActivity {
                 cameraProvider.unbindAll();
 
                 cameraProvider.bindToLifecycle(
-                        (LifecycleOwner) this,
+                        this,
                         selector,
                         preview,
                         imageCapture
                 );
 
-                ready.run();
+                cameraReady.run();
 
             } catch (Exception e) {
 
                 Toast.makeText(
-                        this,
-                        "تعذر تشغيل الكاميرا",
+                        MainActivity.this,
+                        "تعذر تشغيل الكاميرا: " + e.getMessage(),
                         Toast.LENGTH_LONG
                 ).show();
             }
@@ -204,26 +204,36 @@ public class MainActivity extends ComponentActivity {
         }, ContextCompat.getMainExecutor(this));
     }
 
-    // ==========================
+    // =====================================================
     // التقاط الصورة
-    // ==========================
+    // =====================================================
 
-    private void takePicture(Button button) {
+    private void takePicture(Button captureButton) {
 
         if (imageCapture == null) {
 
-            button.setEnabled(true);
+            captureButton.setEnabled(true);
+
+            Toast.makeText(
+                    this,
+                    "الكاميرا غير جاهزة",
+                    Toast.LENGTH_SHORT
+            ).show();
+
             return;
         }
 
         try {
+
+            String tempName =
+                    "temp_" + System.currentTimeMillis() + ".jpg";
 
             ContentValues values =
                     new ContentValues();
 
             values.put(
                     MediaStore.Images.Media.DISPLAY_NAME,
-                    "temp_" + System.currentTimeMillis()
+                    tempName
             );
 
             values.put(
@@ -231,12 +241,12 @@ public class MainActivity extends ComponentActivity {
                     "image/jpeg"
             );
 
-            if (Build.VERSION.SDK_INT >= 29) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
 
                 values.put(
                         MediaStore.Images.Media.RELATIVE_PATH,
-                        Environment.DIRECTORY_PICTURES +
-                                "/Quick Name Camera"
+                        Environment.DIRECTORY_PICTURES
+                                + "/Quick Name Camera"
                 );
             }
 
@@ -259,8 +269,7 @@ public class MainActivity extends ComponentActivity {
                         public void onImageSaved(
                                 @NonNull ImageCapture.OutputFileResults results) {
 
-                            pendingUri =
-                                    results.getSavedUri();
+                            pendingUri = results.getSavedUri();
 
                             if (pendingUri == null) {
 
@@ -270,14 +279,17 @@ public class MainActivity extends ComponentActivity {
                                         Toast.LENGTH_LONG
                                 ).show();
 
-                                button.setEnabled(true);
+                                captureButton.setEnabled(true);
+
                                 return;
                             }
 
+                            // إيقاف الكاميرا مؤقتًا
                             if (cameraProvider != null) {
                                 cameraProvider.unbindAll();
                             }
 
+                            // مباشرة إلى شاشة الاسم
                             showNameScreen();
                         }
 
@@ -287,12 +299,12 @@ public class MainActivity extends ComponentActivity {
 
                             Toast.makeText(
                                     MainActivity.this,
-                                    "فشل التصوير: " +
-                                            exception.getMessage(),
+                                    "فشل التصوير: "
+                                            + exception.getMessage(),
                                     Toast.LENGTH_LONG
                             ).show();
 
-                            button.setEnabled(true);
+                            captureButton.setEnabled(true);
                         }
                     }
             );
@@ -301,17 +313,18 @@ public class MainActivity extends ComponentActivity {
 
             Toast.makeText(
                     this,
-                    "حدث خطأ أثناء التصوير",
+                    "حدث خطأ أثناء التصوير: "
+                            + e.getMessage(),
                     Toast.LENGTH_LONG
             ).show();
 
-            button.setEnabled(true);
+            captureButton.setEnabled(true);
         }
     }
 
-    // ==========================
-    // شاشة تسمية الصورة
-    // ==========================
+    // =====================================================
+    // شاشة معاينة + تسمية الصورة
+    // =====================================================
 
     private void showNameScreen() {
 
@@ -339,8 +352,17 @@ public class MainActivity extends ComponentActivity {
         );
 
         try {
+
+            image.setImageURI(null);
             image.setImageURI(pendingUri);
-        } catch (Exception ignored) {
+
+        } catch (Exception e) {
+
+            Toast.makeText(
+                    this,
+                    "تعذر عرض الصورة",
+                    Toast.LENGTH_SHORT
+            ).show();
         }
 
         root.addView(
@@ -352,6 +374,7 @@ public class MainActivity extends ComponentActivity {
                 )
         );
 
+        // خانة الاسم
         nameBox =
                 new EditText(this);
 
@@ -371,6 +394,7 @@ public class MainActivity extends ComponentActivity {
                 )
         );
 
+        // الأزرار
         LinearLayout buttons =
                 new LinearLayout(this);
 
@@ -385,6 +409,8 @@ public class MainActivity extends ComponentActivity {
                 "إعادة التصوير"
         );
 
+        retake.setTextSize(18);
+
         Button save =
                 new Button(this);
 
@@ -393,8 +419,6 @@ public class MainActivity extends ComponentActivity {
         );
 
         save.setTextSize(20);
-
-        retake.setTextSize(18);
 
         buttons.addView(
                 retake,
@@ -418,21 +442,26 @@ public class MainActivity extends ComponentActivity {
 
         setContentView(root);
 
+        // =================================================
         // إعادة التصوير
+        // =================================================
+
         retake.setOnClickListener(v -> {
+
+            hideKeyboard();
 
             deletePendingPhoto();
 
             showCamera();
         });
 
+        // =================================================
         // حفظ
-        save.setOnClickListener(v -> {
+        // =================================================
 
-            savePhoto();
-        });
+        save.setOnClickListener(v -> savePhoto());
 
-        // فتح الكيبورد مباشرة
+        // فتح الكيبورد تلقائيًا
         nameBox.requestFocus();
 
         nameBox.postDelayed(() -> {
@@ -451,16 +480,23 @@ public class MainActivity extends ComponentActivity {
                 );
             }
 
-        }, 250);
+        }, 300);
     }
 
-    // ==========================
-    // حفظ الاسم
-    // ==========================
+    // =====================================================
+    // حفظ الصورة بالاسم
+    // =====================================================
 
     private void savePhoto() {
 
         if (pendingUri == null) {
+
+            Toast.makeText(
+                    this,
+                    "لا توجد صورة للحفظ",
+                    Toast.LENGTH_LONG
+            ).show();
+
             return;
         }
 
@@ -475,19 +511,29 @@ public class MainActivity extends ComponentActivity {
                     "اكتب اسم الصورة"
             );
 
+            nameBox.requestFocus();
+
             return;
         }
 
         name = cleanName(name);
 
-        if (!name.toLowerCase()
+        if (name.isEmpty()) {
+
+            nameBox.setError(
+                    "الاسم غير صالح"
+            );
+
+            return;
+        }
+
+        if (!name.toLowerCase(Locale.ROOT)
                 .endsWith(".jpg")) {
 
             name += ".jpg";
         }
 
-        name =
-                getUniqueName(name);
+        name = getUniqueName(name);
 
         try {
 
@@ -499,6 +545,11 @@ public class MainActivity extends ComponentActivity {
                     name
             );
 
+            values.put(
+                    MediaStore.Images.Media.MIME_TYPE,
+                    "image/jpeg"
+            );
+
             int updated =
                     getContentResolver().update(
                             pendingUri,
@@ -508,7 +559,9 @@ public class MainActivity extends ComponentActivity {
                     );
 
             if (updated <= 0) {
-                throw new Exception();
+                throw new Exception(
+                        "تعذر تغيير اسم الملف"
+                );
             }
 
             pendingUri = null;
@@ -517,26 +570,27 @@ public class MainActivity extends ComponentActivity {
 
             Toast.makeText(
                     this,
-                    "تم الحفظ: " + name,
+                    "تم حفظ الصورة باسم " + name,
                     Toast.LENGTH_SHORT
             ).show();
 
-            // الرجوع مباشرة للكاميرا
+            // مباشرة إلى الكاميرا للصورة التالية
             showCamera();
 
         } catch (Exception e) {
 
             Toast.makeText(
                     this,
-                    "تعذر حفظ الصورة",
+                    "تعذر حفظ الصورة: "
+                            + e.getMessage(),
                     Toast.LENGTH_LONG
             ).show();
         }
     }
 
-    // ==========================
+    // =====================================================
     // تنظيف الاسم
-    // ==========================
+    // =====================================================
 
     private String cleanName(String name) {
 
@@ -549,12 +603,13 @@ public class MainActivity extends ComponentActivity {
                 .replace("\"", "_")
                 .replace("<", "_")
                 .replace(">", "_")
-                .replace("|", "_");
+                .replace("|", "_")
+                .trim();
     }
 
-    // ==========================
-    // اسم غير مكرر
-    // ==========================
+    // =====================================================
+    // منع تكرار الأسماء
+    // =====================================================
 
     private String getUniqueName(
             String originalName) {
@@ -587,18 +642,23 @@ public class MainActivity extends ComponentActivity {
         while (imageExists(candidate)) {
 
             candidate =
-                    base +
-                            String.format(
-                                    "_%02d",
-                                    number
-                            ) +
-                            extension;
+                    base
+                            + String.format(
+                            Locale.ROOT,
+                            "_%02d",
+                            number
+                    )
+                            + extension;
 
             number++;
         }
 
         return candidate;
     }
+
+    // =====================================================
+    // فحص وجود اسم مسبق
+    // =====================================================
 
     private boolean imageExists(
             String name) {
@@ -607,19 +667,26 @@ public class MainActivity extends ComponentActivity {
 
         try {
 
+            String selection =
+                    MediaStore.Images.Media.DISPLAY_NAME
+                            + "=?";
+
+            String[] args =
+                    new String[]{name};
+
             cursor =
                     getContentResolver().query(
                             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                             new String[]{
                                     MediaStore.Images.Media._ID
                             },
-                            MediaStore.Images.Media.DISPLAY_NAME + "=?",
-                            new String[]{name},
+                            selection,
+                            args,
                             null
                     );
 
-            return cursor != null &&
-                    cursor.moveToFirst();
+            return cursor != null
+                    && cursor.moveToFirst();
 
         } catch (Exception e) {
 
@@ -633,9 +700,9 @@ public class MainActivity extends ComponentActivity {
         }
     }
 
-    // ==========================
-    // حذف الصورة عند إعادة التصوير
-    // ==========================
+    // =====================================================
+    // حذف الصورة عند اختيار إعادة التصوير
+    // =====================================================
 
     private void deletePendingPhoto() {
 
@@ -657,9 +724,9 @@ public class MainActivity extends ComponentActivity {
         pendingUri = null;
     }
 
-    // ==========================
+    // =====================================================
     // إخفاء الكيبورد
-    // ==========================
+    // =====================================================
 
     private void hideKeyboard() {
 
@@ -688,5 +755,19 @@ public class MainActivity extends ComponentActivity {
 
         } catch (Exception ignored) {
         }
+    }
+
+    // =====================================================
+    // تنظيف CameraX عند إغلاق التطبيق
+    // =====================================================
+
+    @Override
+    protected void onDestroy() {
+
+        if (cameraProvider != null) {
+            cameraProvider.unbindAll();
+        }
+
+        super.onDestroy();
     }
 }
