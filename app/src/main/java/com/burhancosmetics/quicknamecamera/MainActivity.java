@@ -36,23 +36,24 @@ public class MainActivity extends Activity {
     private EditText nameBox;
     private ImageView preview;
 
-    @Override
-    protected void onCreate(Bundle b) {
-        super.onCreate(b);
+ @Override
+protected void onCreate(Bundle b) {
+    super.onCreate(b);
 
-        if (checkSelfPermission(Manifest.permission.CAMERA)
-                != PackageManager.PERMISSION_GRANTED) {
+    showCameraScreen();
 
-            requestPermissions(
-                    new String[]{Manifest.permission.CAMERA},
-                    REQ_CAMERA
-            );
+    if (checkSelfPermission(Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED) {
 
-        } else {
-            takePhoto();
-        }
+        requestPermissions(
+                new String[]{Manifest.permission.CAMERA},
+                REQ_CAMERA
+        );
+
+    } else if (b == null) {
+        takePhoto();
     }
-
+}
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
