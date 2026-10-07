@@ -1,7 +1,7 @@
 package com.burhancosmetics.quicknamecamera;
 
 import android.Manifest;
-import android.app.Activity;
+import androidx.activity.ComponentActivity;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -28,13 +28,13 @@ import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
-import androidx.lifecycle.LifecycleOwner;
+
 
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.util.concurrent.Executor;
 
-public class MainActivity extends Activity {
+public class MainActivity extends ComponentActivity {
 
     private static final int CAMERA_PERMISSION = 100;
 
