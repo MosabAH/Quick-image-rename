@@ -533,8 +533,222 @@ public class MainActivity extends Activity {
     }
 
     /*
- * مثال:
- * chair.jpg
- * chair_01.jpg
- * chair_02.jpg
- */
+     * منع تكرار أسماء الصور
+     *
+     * مثال:
+     * chair.jpg
+     * chair_01.jpg
+     * chair_02.jpg
+     */
+    private String getUniqueName(
+            String originalName) {
+
+        String base =
+                originalName;
+
+        String extension = "";
+
+        int dot =
+                originalName.lastIndexOf(".");
+
+        if (dot > 0) {
+
+            base =
+                    originalName.substring(
+                            0,
+                            dot
+                    );
+
+            extension =
+                    originalName.substring(
+                            dot
+                    );
+        }
+
+        String candidate =
+                base + extension;
+
+        int number = 1;
+
+        while (imageExists(candidate)) {
+
+            candidate =
+                    base
+                            + String.format(
+                            "_%02d",
+                            number
+                    )
+                            + extension;
+
+            number++;
+        }
+
+        return candidate;
+    }
+
+    /*
+     * فحص وجود صورة بنفس الاسم
+     */
+    private boolean imageExists(
+            String name) {
+
+        Cursor cursor = null;
+
+        try {
+
+            String[] projection = {
+                    MediaStore.Images.Media._ID
+            };
+
+            String selection =
+                    MediaStore.Images.Media.DISPLAY_NAME
+                            + "=?";
+
+            String[] args = {
+                    name
+            };
+
+            cursor =
+                    getContentResolver().query(
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            projection,
+                            selection,
+                            args,
+                            null
+                    );
+
+            return cursor != null
+                    && cursor.moveToFirst();
+
+        } catch (Exception e) {
+
+            return false;
+
+        } finally {
+
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+    }
+
+    /*
+     * حذف الصورة المؤقتة
+     */
+    private void deletePendingPhoto() {
+
+        if (pendingUri == null) {
+            return;
+        }
+
+        try {
+
+            getContentResolver().delete(
+                    pendingUri,
+                    null,
+                    null
+            );
+
+        } catch (Exception ignored) {
+        }
+
+        pendingUri = null;
+    }
+
+    /*
+     * إخفاء الكيبورد
+     */
+    private void hideKeyboard() {
+
+        try {
+
+            InputMethodManager imm =
+                    (InputMethodManager)
+                            getSystemService(
+                                    Context.INPUT_METHOD_SERVICE
+                            );
+
+            if (imm != null
+                    && getCurrentFocus() != null) {
+
+                imm.hideSoftInputFromWindow(
+                        getCurrentFocus()
+                                .getWindowToken(),
+                        0
+                );
+            }
+
+        } catch (Exception ignored) {
+        }
+    }
+
+    /*
+     * الشاشة الرئيسية
+     */
+    private void showCameraScreen() {
+
+        LinearLayout layout =
+                new LinearLayout(this);
+
+        layout.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        layout.setGravity(
+                Gravity.CENTER
+        );
+
+        layout.setPadding(
+                30,
+                30,
+                30,
+                30
+        );
+
+        Button shot =
+                new Button(this);
+
+        shot.setText(
+                "📷 تصوير صورة"
+        );
+
+        shot.setTextSize(24);
+
+        layout.addView(
+                shot,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        150
+                )
+        );
+
+        shot.setOnClickListener(v -> {
+
+            if (Build.VERSION.SDK_INT
+                    >= Build.VERSION_CODES.M) {
+
+                if (checkSelfPermission(
+                        Manifest.permission.CAMERA)
+                        == PackageManager.PERMISSION_GRANTED) {
+
+                    takePhoto();
+
+                } else {
+
+                    requestPermissions(
+                            new String[]{
+                                    Manifest.permission.CAMERA
+                            },
+                            REQ_CAMERA
+                    );
+                }
+
+            } else {
+
+                takePhoto();
+            }
+        });
+
+        setContentView(layout);
+    }
+}
