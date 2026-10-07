@@ -145,36 +145,43 @@ protected void onCreate(Bundle b) {
     }
 }
 
+  
     @Override
-    protected void onActivityResult(
-            int requestCode,
-            int resultCode,
-            Intent data) {
+protected void onActivityResult(
+        int requestCode,
+        int resultCode,
+        Intent data) {
 
-        super.onActivityResult(
-                requestCode,
-                resultCode,
-                data
-        );
+    super.onActivityResult(
+            requestCode,
+            resultCode,
+            data
+    );
 
-        if (requestCode != REQ_TAKE_PHOTO) {
-            return;
-        }
-
-        if (resultCode == RESULT_OK
-                && pendingFile != null
-                && pendingFile.exists()) {
-
-            showNameScreen();
-
-        } else {
-
-            pendingFile = null;
-            pendingUri = null;
-
-            takePhoto();
-        }
+    if (requestCode != REQ_TAKE_PHOTO) {
+        return;
     }
+
+    if (resultCode == RESULT_OK
+            && pendingUri != null) {
+
+        showNameScreen();
+
+    } else {
+
+        if (pendingUri != null) {
+            getContentResolver().delete(
+                    pendingUri,
+                    null,
+                    null
+            );
+        }
+
+        pendingUri = null;
+
+        showCameraScreen();
+    }
+}
 
     private void showNameScreen() {
 
