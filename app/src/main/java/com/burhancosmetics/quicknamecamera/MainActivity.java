@@ -407,14 +407,13 @@ protected void onActivityResult(
             }
 
             try (
-                    FileInputStream input =
-                            new FileInputStream(pendingFile);
-
-                    OutputStream output =
-                            getContentResolver()
-                                    .openOutputStream(outputUri)
-            ) {
-
+        java.io.InputStream input =
+                getContentResolver()
+                        .openInputStream(pendingUri);
+        OutputStream output =
+                getContentResolver()
+                        .openOutputStream(outputUri)
+) {
                 if (output == null) {
                     throw new Exception(
                             "Could not open output"
@@ -457,10 +456,13 @@ protected void onActivityResult(
                 );
             }
 
-            if (pendingFile != null) {
-                pendingFile.delete();
-            }
-
+           if (pendingUri != null) {
+    getContentResolver().delete(
+            pendingUri,
+            null,
+            null
+    );
+}
             pendingFile = null;
             pendingUri = null;
 
