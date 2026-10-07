@@ -146,7 +146,7 @@ protected void onCreate(Bundle b) {
 }
 
   
-    @Override
+@Override
 protected void onActivityResult(
         int requestCode,
         int resultCode,
@@ -162,25 +162,51 @@ protected void onActivityResult(
         return;
     }
 
-    if (resultCode == RESULT_OK
-            && pendingUri != null) {
+    // إذا الصورة موجودة فعلياً في MediaStore،
+    // ننتقل للاسم حتى لو الكاميرا رجعت RESULT_CANCELED
+    if (pendingUri != null) {
 
-        showNameScreen();
+        try {
+            android.database.Cursor cursor =
+                    getContentResolver().query(
+                            pendingUri,
+                            new String[]{
+                                    MediaStore.Images.Media.SIZE
+                            },
+                            null,
+                            null,
+                            null
+                    );
 
-    } else {
+            long size = 0;
 
-        if (pendingUri != null) {
-            getContentResolver().delete(
-                    pendingUri,
-                    null,
-                    null
-            );
+            if (cursor != null) {
+                if (cursor.moveToFirst()) {
+                    size = cursor.getLong(0);
+                }
+                cursor.close();
+            }
+
+            if (size > 0) {
+                showNameScreen();
+                return;
+            }
+
+        } catch (Exception ignored) {
         }
-
-        pendingUri = null;
-
-        showCameraScreen();
     }
+
+    // ما في صورة فعلية
+    if (pendingUri != null) {
+        getContentResolver().delete(
+                pendingUri,
+                null,
+                null
+        );
+    }
+
+    pendingUri = null;
+    showCameraScreen();
 }
 
     private void showNameScreen() {
