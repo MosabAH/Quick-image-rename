@@ -81,52 +81,68 @@ public class MainActivity extends Activity {
     }
 
     private void takePhoto() {
+    try {
+        ContentValues values = new ContentValues();
 
-        try {
+        values.put(
+                MediaStore.Images.Media.DISPLAY_NAME,
+                "temp_" + System.currentTimeMillis() + ".jpg"
+        );
 
-            File dir = new File(
-                    getCacheDir(),
-                    "camera"
+        values.put(
+                MediaStore.Images.Media.MIME_TYPE,
+                "image/jpeg"
+        );
+
+        if (Build.VERSION.SDK_INT >= 29) {
+            values.put(
+                    MediaStore.Images.Media.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES
+                            + "/Quick Name Camera"
             );
 
-            if (!dir.exists()) {
-                dir.mkdirs();
-            }
-
-            pendingFile = new File(
-                    dir,
-                    "photo_" + System.currentTimeMillis() + ".jpg"
+            values.put(
+                    MediaStore.Images.Media.IS_PENDING,
+                    1
             );
-
-          pendingUri = Uri.fromFile(pendingFile);
-
-            Intent cameraIntent =
-                    new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-
-            cameraIntent.putExtra(
-                    MediaStore.EXTRA_OUTPUT,
-                    pendingUri
-            );
-
-            cameraIntent.addFlags(
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            | Intent.FLAG_GRANT_READ_URI_PERMISSION
-            );
-
-            startActivityForResult(
-                    cameraIntent,
-                    REQ_TAKE_PHOTO
-            );
-
-        } catch (Exception e) {
-
-            Toast.makeText(
-                    this,
-                    "تعذر فتح الكاميرا",
-                    Toast.LENGTH_LONG
-            ).show();
         }
+
+        pendingUri = getContentResolver().insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                values
+        );
+
+        if (pendingUri == null) {
+            throw new Exception("Could not create image");
+        }
+
+        Intent cameraIntent =
+                new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+
+        cameraIntent.putExtra(
+                MediaStore.EXTRA_OUTPUT,
+                pendingUri
+        );
+
+        cameraIntent.addFlags(
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION
+        );
+
+        startActivityForResult(
+                cameraIntent,
+                REQ_TAKE_PHOTO
+        );
+
+    } catch (Exception e) {
+
+        Toast.makeText(
+                this,
+                "تعذر فتح الكاميرا: " + e.getMessage(),
+                Toast.LENGTH_LONG
+        ).show();
     }
+}
 
     @Override
     protected void onActivityResult(
