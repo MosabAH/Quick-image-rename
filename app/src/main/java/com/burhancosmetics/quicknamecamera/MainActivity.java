@@ -158,54 +158,37 @@ protected void onActivityResult(
             data
     );
 
-    if (requestCode != REQ_TAKE_PHOTO) {
+    if (requestCode != 20) {
         return;
     }
 
-    // إذا الصورة موجودة فعلياً في MediaStore،
-    // ننتقل للاسم حتى لو الكاميرا رجعت RESULT_CANCELED
     if (pendingUri != null) {
 
         try {
-            android.database.Cursor cursor =
-                    getContentResolver().query(
-                            pendingUri,
-                            new String[]{
-                                    MediaStore.Images.Media.SIZE
-                            },
-                            null,
-                            null,
-                            null
-                    );
+            ContentValues done = new ContentValues();
 
-            long size = 0;
+            if (Build.VERSION.SDK_INT >= 29) {
+                done.put(
+                        MediaStore.Images.Media.IS_PENDING,
+                        0
+                );
 
-            if (cursor != null) {
-                if (cursor.moveToFirst()) {
-                    size = cursor.getLong(0);
-                }
-                cursor.close();
+                getContentResolver().update(
+                        pendingUri,
+                        done,
+                        null,
+                        null
+                );
             }
 
-            if (size > 0) {
-                showNameScreen();
-                return;
-            }
+            showNameScreen();
+            return;
 
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // نكمل للأسفل
         }
     }
 
-    // ما في صورة فعلية
-    if (pendingUri != null) {
-        getContentResolver().delete(
-                pendingUri,
-                null,
-                null
-        );
-    }
-
-    pendingUri = null;
     showCameraScreen();
 }
 
