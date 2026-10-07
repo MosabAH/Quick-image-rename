@@ -4,16 +4,15 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Context;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.Handler;
 import android.provider.MediaStore;
 import android.view.Gravity;
+import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -21,45 +20,56 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ImageCapture;
+import androidx.camera.core.ImageCaptureException;
+import androidx.camera.core.Preview;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.view.PreviewView;
+import androidx.core.content.ContextCompat;
+import androidx.lifecycle.LifecycleOwner;
+
+import com.google.common.util.concurrent.ListenableFuture;
+
+import java.util.concurrent.Executor;
+
 public class MainActivity extends Activity {
 
-    private static final int REQ_CAMERA = 10;
-    private static final int REQ_TAKE_PHOTO = 20;
+    private static final int CAMERA_PERMISSION = 100;
+
+    private PreviewView previewView;
+    private ImageCapture imageCapture;
 
     private Uri pendingUri;
+
     private EditText nameBox;
-    private ImageView preview;
+
+    private ProcessCameraProvider cameraProvider;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        showCameraScreen();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                checkSelfPermission(Manifest.permission.CAMERA)
+                        != PackageManager.PERMISSION_GRANTED) {
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            requestPermissions(
+                    new String[]{Manifest.permission.CAMERA},
+                    CAMERA_PERMISSION
+            );
 
-            if (checkSelfPermission(Manifest.permission.CAMERA)
-                    != PackageManager.PERMISSION_GRANTED) {
-
-                requestPermissions(
-                        new String[]{Manifest.permission.CAMERA},
-                        REQ_CAMERA
-                );
-
-            } else if (savedInstanceState == null) {
-                takePhoto();
-            }
-
-        } else if (savedInstanceState == null) {
-            takePhoto();
+        } else {
+            showCamera();
         }
     }
 
     @Override
     public void onRequestPermissionsResult(
             int requestCode,
-            String[] permissions,
-            int[] grantResults) {
+            @NonNull String[] permissions,
+            @NonNull int[] grantResults) {
 
         super.onRequestPermissionsResult(
                 requestCode,
@@ -67,51 +77,153 @@ public class MainActivity extends Activity {
                 grantResults
         );
 
-        if (requestCode == REQ_CAMERA) {
+        if (requestCode == CAMERA_PERMISSION) {
 
-            if (grantResults.length > 0
-                    && grantResults[0]
-                    == PackageManager.PERMISSION_GRANTED) {
+            if (grantResults.length > 0 &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED) {
 
-                takePhoto();
+                showCamera();
 
             } else {
 
                 Toast.makeText(
                         this,
-                        "لازم تسمح للتطبيق باستخدام الكاميرا",
+                        "يجب السماح باستخدام الكاميرا",
                         Toast.LENGTH_LONG
                 ).show();
             }
         }
     }
 
-    /*
-     * إنشاء ملف مؤقت ثم فتح الكاميرا
-     */
-    private void takePhoto() {
+    // ==========================
+    // شاشة الكاميرا
+    // ==========================
+
+    private void showCamera() {
+
+        hideKeyboard();
+
+        LinearLayout root = new LinearLayout(this);
+
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+
+        previewView = new PreviewView(this);
+
+        root.addView(
+                previewView,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        0,
+                        1
+                )
+        );
+
+        Button captureButton = new Button(this);
+
+        captureButton.setText("📷 تصوير");
+        captureButton.setTextSize(24);
+
+        root.addView(
+                captureButton,
+                new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        160
+                )
+        );
+
+        setContentView(root);
+
+        captureButton.setEnabled(false);
+
+        startCamera(() -> {
+            captureButton.setEnabled(true);
+        });
+
+        captureButton.setOnClickListener(v -> {
+
+            captureButton.setEnabled(false);
+
+            takePicture(captureButton);
+        });
+    }
+
+    // ==========================
+    // تشغيل CameraX
+    // ==========================
+
+    private void startCamera(Runnable ready) {
+
+        ListenableFuture<ProcessCameraProvider> future =
+                ProcessCameraProvider.getInstance(this);
+
+        future.addListener(() -> {
+
+            try {
+
+                cameraProvider = future.get();
+
+                Preview preview =
+                        new Preview.Builder()
+                                .build();
+
+                imageCapture =
+                        new ImageCapture.Builder()
+                                .setCaptureMode(
+                                        ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY
+                                )
+                                .build();
+
+                CameraSelector selector =
+                        CameraSelector.DEFAULT_BACK_CAMERA;
+
+                preview.setSurfaceProvider(
+                        previewView.getSurfaceProvider()
+                );
+
+                cameraProvider.unbindAll();
+
+                cameraProvider.bindToLifecycle(
+                        (LifecycleOwner) this,
+                        selector,
+                        preview,
+                        imageCapture
+                );
+
+                ready.run();
+
+            } catch (Exception e) {
+
+                Toast.makeText(
+                        this,
+                        "تعذر تشغيل الكاميرا",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+
+        }, ContextCompat.getMainExecutor(this));
+    }
+
+    // ==========================
+    // التقاط الصورة
+    // ==========================
+
+    private void takePicture(Button button) {
+
+        if (imageCapture == null) {
+
+            button.setEnabled(true);
+            return;
+        }
 
         try {
 
-            // إذا كان هناك ملف مؤقت قديم نحذفه
-            if (pendingUri != null) {
-                try {
-                    getContentResolver().delete(
-                            pendingUri,
-                            null,
-                            null
-                    );
-                } catch (Exception ignored) {
-                }
-
-                pendingUri = null;
-            }
-
-            ContentValues values = new ContentValues();
+            ContentValues values =
+                    new ContentValues();
 
             values.put(
                     MediaStore.Images.Media.DISPLAY_NAME,
-                    "temp_" + System.currentTimeMillis() + ".jpg"
+                    "temp_" + System.currentTimeMillis()
             );
 
             values.put(
@@ -123,167 +235,116 @@ public class MainActivity extends Activity {
 
                 values.put(
                         MediaStore.Images.Media.RELATIVE_PATH,
-                        Environment.DIRECTORY_PICTURES
-                                + "/Quick Name Camera"
-                );
-
-                values.put(
-                        MediaStore.Images.Media.IS_PENDING,
-                        1
+                        Environment.DIRECTORY_PICTURES +
+                                "/Quick Name Camera"
                 );
             }
 
-            pendingUri = getContentResolver().insert(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    values
-            );
+            ImageCapture.OutputFileOptions options =
+                    new ImageCapture.OutputFileOptions.Builder(
+                            getContentResolver(),
+                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                            values
+                    ).build();
 
-            if (pendingUri == null) {
-                throw new Exception("Could not create image");
-            }
+            Executor executor =
+                    ContextCompat.getMainExecutor(this);
 
-            Intent cameraIntent =
-                    new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            imageCapture.takePicture(
+                    options,
+                    executor,
+                    new ImageCapture.OnImageSavedCallback() {
 
-            cameraIntent.putExtra(
-                    MediaStore.EXTRA_OUTPUT,
-                    pendingUri
-            );
+                        @Override
+                        public void onImageSaved(
+                                @NonNull ImageCapture.OutputFileResults results) {
 
-            cameraIntent.addFlags(
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            | Intent.FLAG_GRANT_READ_URI_PERMISSION
-            );
+                            pendingUri =
+                                    results.getSavedUri();
 
-            // نتأكد أن هناك تطبيق كاميرا
-            if (cameraIntent.resolveActivity(
-                    getPackageManager()) == null) {
+                            if (pendingUri == null) {
 
-                deletePendingPhoto();
+                                Toast.makeText(
+                                        MainActivity.this,
+                                        "لم يتم إنشاء الصورة",
+                                        Toast.LENGTH_LONG
+                                ).show();
 
-                Toast.makeText(
-                        this,
-                        "لم يتم العثور على تطبيق كاميرا",
-                        Toast.LENGTH_LONG
-                ).show();
+                                button.setEnabled(true);
+                                return;
+                            }
 
-                return;
-            }
+                            if (cameraProvider != null) {
+                                cameraProvider.unbindAll();
+                            }
 
-            startActivityForResult(
-                    cameraIntent,
-                    REQ_TAKE_PHOTO
+                            showNameScreen();
+                        }
+
+                        @Override
+                        public void onError(
+                                @NonNull ImageCaptureException exception) {
+
+                            Toast.makeText(
+                                    MainActivity.this,
+                                    "فشل التصوير: " +
+                                            exception.getMessage(),
+                                    Toast.LENGTH_LONG
+                            ).show();
+
+                            button.setEnabled(true);
+                        }
+                    }
             );
 
         } catch (Exception e) {
 
-            deletePendingPhoto();
-
             Toast.makeText(
                     this,
-                    "تعذر فتح الكاميرا",
+                    "حدث خطأ أثناء التصوير",
                     Toast.LENGTH_LONG
             ).show();
 
-            showCameraScreen();
+            button.setEnabled(true);
         }
     }
 
-    /*
-     * النتيجة بعد الرجوع من الكاميرا
-     *
-     * مهم:
-     * لا نفحص SIZE.
-     * RESULT_OK يعني أن التصوير تم بنجاح.
-     */
-   @Override
-protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-    super.onActivityResult(requestCode, resultCode, data);
+    // ==========================
+    // شاشة تسمية الصورة
+    // ==========================
 
-    if (requestCode != REQ_TAKE_PHOTO) {
-        return;
-    }
-
-    if (pendingUri == null) {
-        showCameraScreen();
-        return;
-    }
-
-    // نعطي تطبيق الكاميرا وقتًا قصيرًا لإنهاء كتابة الصورة
-    new Handler(getMainLooper()).postDelayed(() -> {
-
-        boolean photoExists = false;
-
-        try {
-            android.os.ParcelFileDescriptor pfd =
-                    getContentResolver().openFileDescriptor(pendingUri, "r");
-
-            if (pfd != null) {
-                long size = pfd.getStatSize();
-                pfd.close();
-
-                photoExists = size > 0;
-            }
-
-        } catch (Exception ignored) {
-        }
-
-        if (photoExists) {
-            // الصورة موجودة فعليًا
-            showNameScreen();
-        } else {
-            // فعلًا لم يتم التقاط صورة
-            deletePendingPhoto();
-            showCameraScreen();
-        }
-
-    }, 500);
-}
-    /*
-     * شاشة تسمية الصورة
-     */
     private void showNameScreen() {
 
-        LinearLayout layout =
+        LinearLayout root =
                 new LinearLayout(this);
 
-        layout.setOrientation(
+        root.setOrientation(
                 LinearLayout.VERTICAL
         );
 
-        layout.setPadding(
+        root.setPadding(
                 20,
                 20,
                 20,
                 20
         );
 
-        /*
-         * معاينة الصورة
-         */
-        preview = new ImageView(this);
+        ImageView image =
+                new ImageView(this);
 
-        preview.setAdjustViewBounds(true);
+        image.setAdjustViewBounds(true);
 
-        preview.setScaleType(
+        image.setScaleType(
                 ImageView.ScaleType.CENTER_INSIDE
         );
 
         try {
-
-            preview.setImageURI(
-                    null
-            );
-
-            preview.setImageURI(
-                    pendingUri
-            );
-
+            image.setImageURI(pendingUri);
         } catch (Exception ignored) {
         }
 
-        layout.addView(
-                preview,
+        root.addView(
+                image,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
                         0,
@@ -291,9 +352,6 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                 )
         );
 
-        /*
-         * خانة الاسم
-         */
         nameBox =
                 new EditText(this);
 
@@ -305,17 +363,14 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 
         nameBox.setSingleLine(true);
 
-        layout.addView(
+        root.addView(
                 nameBox,
                 new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,
-                        120
+                        130
                 )
         );
 
-        /*
-         * الأزرار
-         */
         LinearLayout buttons =
                 new LinearLayout(this);
 
@@ -330,8 +385,6 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                 "إعادة التصوير"
         );
 
-        retake.setTextSize(18);
-
         Button save =
                 new Button(this);
 
@@ -341,11 +394,13 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 
         save.setTextSize(20);
 
+        retake.setTextSize(18);
+
         buttons.addView(
                 retake,
                 new LinearLayout.LayoutParams(
                         0,
-                        120,
+                        130,
                         1
                 )
         );
@@ -354,44 +409,30 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                 save,
                 new LinearLayout.LayoutParams(
                         0,
-                        120,
+                        130,
                         1
                 )
         );
 
-        layout.addView(buttons);
+        root.addView(buttons);
 
-        /*
-         * إعادة التصوير
-         */
+        setContentView(root);
+
+        // إعادة التصوير
         retake.setOnClickListener(v -> {
-
-            hideKeyboard();
 
             deletePendingPhoto();
 
-            showCameraScreen();
-
-            new Handler(
-                    getMainLooper()
-            ).postDelayed(
-                    this::takePhoto,
-                    200
-            );
+            showCamera();
         });
 
-        /*
-         * حفظ الصورة
-         */
-        save.setOnClickListener(
-                v -> savePhoto()
-        );
+        // حفظ
+        save.setOnClickListener(v -> {
 
-        setContentView(layout);
+            savePhoto();
+        });
 
-        /*
-         * فتح الكيبورد تلقائيًا
-         */
+        // فتح الكيبورد مباشرة
         nameBox.requestFocus();
 
         nameBox.postDelayed(() -> {
@@ -410,22 +451,16 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                 );
             }
 
-        }, 300);
+        }, 250);
     }
 
-    /*
-     * حفظ الصورة بالاسم
-     */
+    // ==========================
+    // حفظ الاسم
+    // ==========================
+
     private void savePhoto() {
 
         if (pendingUri == null) {
-
-            Toast.makeText(
-                    this,
-                    "لا توجد صورة للحفظ",
-                    Toast.LENGTH_LONG
-            ).show();
-
             return;
         }
 
@@ -440,37 +475,17 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                     "اكتب اسم الصورة"
             );
 
-            nameBox.requestFocus();
-
             return;
         }
 
-        /*
-         * تنظيف الاسم من الرموز غير المناسبة
-         */
-        name = name
-                .replace("/", "_")
-                .replace("\\", "_")
-                .replace(":", "_")
-                .replace("*", "_")
-                .replace("?", "_")
-                .replace("\"", "_")
-                .replace("<", "_")
-                .replace(">", "_")
-                .replace("|", "_");
+        name = cleanName(name);
 
-        /*
-         * إضافة jpg
-         */
         if (!name.toLowerCase()
                 .endsWith(".jpg")) {
 
             name += ".jpg";
         }
 
-        /*
-         * منع تكرار الاسم
-         */
         name =
                 getUniqueName(name);
 
@@ -484,19 +499,6 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                     name
             );
 
-            values.put(
-                    MediaStore.Images.Media.MIME_TYPE,
-                    "image/jpeg"
-            );
-
-            if (Build.VERSION.SDK_INT >= 29) {
-
-                values.put(
-                        MediaStore.Images.Media.IS_PENDING,
-                        0
-                );
-            }
-
             int updated =
                     getContentResolver().update(
                             pendingUri,
@@ -506,10 +508,7 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                     );
 
             if (updated <= 0) {
-
-                throw new Exception(
-                        "Could not update image"
-                );
+                throw new Exception();
             }
 
             pendingUri = null;
@@ -518,22 +517,12 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 
             Toast.makeText(
                     this,
-                    "تم حفظ الصورة باسم " + name,
+                    "تم الحفظ: " + name,
                     Toast.LENGTH_SHORT
             ).show();
 
-            /*
-             * بعد الحفظ:
-             * افتح الكاميرا مباشرة للصورة التالية
-             */
-            showCameraScreen();
-
-            new Handler(
-                    getMainLooper()
-            ).postDelayed(
-                    this::takePhoto,
-                    300
-            );
+            // الرجوع مباشرة للكاميرا
+            showCamera();
 
         } catch (Exception e) {
 
@@ -545,14 +534,28 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         }
     }
 
-    /*
-     * منع تكرار أسماء الصور
-     *
-     * مثال:
-     * chair.jpg
-     * chair_01.jpg
-     * chair_02.jpg
-     */
+    // ==========================
+    // تنظيف الاسم
+    // ==========================
+
+    private String cleanName(String name) {
+
+        return name
+                .replace("/", "_")
+                .replace("\\", "_")
+                .replace(":", "_")
+                .replace("*", "_")
+                .replace("?", "_")
+                .replace("\"", "_")
+                .replace("<", "_")
+                .replace(">", "_")
+                .replace("|", "_");
+    }
+
+    // ==========================
+    // اسم غير مكرر
+    // ==========================
+
     private String getUniqueName(
             String originalName) {
 
@@ -573,9 +576,7 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                     );
 
             extension =
-                    originalName.substring(
-                            dot
-                    );
+                    originalName.substring(dot);
         }
 
         String candidate =
@@ -586,12 +587,12 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         while (imageExists(candidate)) {
 
             candidate =
-                    base
-                            + String.format(
-                            "_%02d",
-                            number
-                    )
-                            + extension;
+                    base +
+                            String.format(
+                                    "_%02d",
+                                    number
+                            ) +
+                            extension;
 
             number++;
         }
@@ -599,9 +600,6 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         return candidate;
     }
 
-    /*
-     * فحص وجود صورة بنفس الاسم
-     */
     private boolean imageExists(
             String name) {
 
@@ -609,29 +607,19 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 
         try {
 
-            String[] projection = {
-                    MediaStore.Images.Media._ID
-            };
-
-            String selection =
-                    MediaStore.Images.Media.DISPLAY_NAME
-                            + "=?";
-
-            String[] args = {
-                    name
-            };
-
             cursor =
                     getContentResolver().query(
                             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                            projection,
-                            selection,
-                            args,
+                            new String[]{
+                                    MediaStore.Images.Media._ID
+                            },
+                            MediaStore.Images.Media.DISPLAY_NAME + "=?",
+                            new String[]{name},
                             null
                     );
 
-            return cursor != null
-                    && cursor.moveToFirst();
+            return cursor != null &&
+                    cursor.moveToFirst();
 
         } catch (Exception e) {
 
@@ -645,9 +633,10 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         }
     }
 
-    /*
-     * حذف الصورة المؤقتة
-     */
+    // ==========================
+    // حذف الصورة عند إعادة التصوير
+    // ==========================
+
     private void deletePendingPhoto() {
 
         if (pendingUri == null) {
@@ -668,12 +657,20 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         pendingUri = null;
     }
 
-    /*
-     * إخفاء الكيبورد
-     */
+    // ==========================
+    // إخفاء الكيبورد
+    // ==========================
+
     private void hideKeyboard() {
 
         try {
+
+            View view =
+                    getCurrentFocus();
+
+            if (view == null) {
+                return;
+            }
 
             InputMethodManager imm =
                     (InputMethodManager)
@@ -681,87 +678,15 @@ protected void onActivityResult(int requestCode, int resultCode, Intent data) {
                                     Context.INPUT_METHOD_SERVICE
                             );
 
-            if (imm != null
-                    && getCurrentFocus() != null) {
+            if (imm != null) {
 
                 imm.hideSoftInputFromWindow(
-                        getCurrentFocus()
-                                .getWindowToken(),
+                        view.getWindowToken(),
                         0
                 );
             }
 
         } catch (Exception ignored) {
         }
-    }
-
-    /*
-     * الشاشة الرئيسية
-     */
-    private void showCameraScreen() {
-
-        LinearLayout layout =
-                new LinearLayout(this);
-
-        layout.setOrientation(
-                LinearLayout.VERTICAL
-        );
-
-        layout.setGravity(
-                Gravity.CENTER
-        );
-
-        layout.setPadding(
-                30,
-                30,
-                30,
-                30
-        );
-
-        Button shot =
-                new Button(this);
-
-        shot.setText(
-                "📷 تصوير صورة"
-        );
-
-        shot.setTextSize(24);
-
-        layout.addView(
-                shot,
-                new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT,
-                        150
-                )
-        );
-
-        shot.setOnClickListener(v -> {
-
-            if (Build.VERSION.SDK_INT
-                    >= Build.VERSION_CODES.M) {
-
-                if (checkSelfPermission(
-                        Manifest.permission.CAMERA)
-                        == PackageManager.PERMISSION_GRANTED) {
-
-                    takePhoto();
-
-                } else {
-
-                    requestPermissions(
-                            new String[]{
-                                    Manifest.permission.CAMERA
-                            },
-                            REQ_CAMERA
-                    );
-                }
-
-            } else {
-
-                takePhoto();
-            }
-        });
-
-        setContentView(layout);
     }
 }
