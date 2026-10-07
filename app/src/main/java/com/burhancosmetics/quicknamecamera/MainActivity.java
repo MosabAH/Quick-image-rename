@@ -135,7 +135,7 @@ public class MainActivity extends Activity {
             nameBox.setError("اكتب اسم الصورة");
             return;
         }
-        name = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+      name = name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace("\"", "_").replace("<", "_").replace(">", "_").replace("|", "_");
         if (!name.toLowerCase().endsWith(".jpg")) name += ".jpg";
 
         try {
