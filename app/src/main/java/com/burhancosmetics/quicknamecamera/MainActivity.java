@@ -1,6 +1,7 @@
 package com.burhancosmetics.quicknamecamera;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -8,8 +9,12 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
@@ -17,6 +22,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -33,6 +39,7 @@ import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
@@ -55,6 +62,9 @@ public class MainActivity extends ComponentActivity {
             "http://192.168.1.72:5000/barcode";
 
     // New endpoint on the SAME Flask server; must be installed server-side.
+    private static final String SEARCH_URL =
+            "http://192.168.1.72:5000/products/search";
+
     private static final String UPLOAD_URL =
             "http://192.168.1.72:5000/product-photo";
 
@@ -72,6 +82,19 @@ public class MainActivity extends ComponentActivity {
 
     private Button saveButton;
     private TextView statusText;
+    private TextView selectedProductText;
+
+    // Name-search selection takes precedence over barcode entry.
+    private String selectedItemCode = null;
+    private String selectedItemLabel = null;
+    private String restoredBarcode = "";
+    private String restoredLocation = "";
+
+    // Debounce and reject stale responses as users type/delete characters.
+    private final Handler searchHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingSearchTask;
+    private int searchGeneration = 0;
+    private AlertDialog searchDialog;
 
     private boolean saving = false;
 
@@ -84,6 +107,10 @@ public class MainActivity extends ComponentActivity {
             if (uri != null) {
                 pendingUri = Uri.parse(uri);
             }
+            restoredBarcode = savedInstanceState.getString("barcode_text", "");
+            restoredLocation = savedInstanceState.getString("location_text", "");
+            selectedItemCode = savedInstanceState.getString("chosen_item_code");
+            selectedItemLabel = savedInstanceState.getString("chosen_item_label");
         }
 
         if (Build.VERSION.SDK_INT >= 23 &&
@@ -95,6 +122,8 @@ public class MainActivity extends ComponentActivity {
                     CAMERA_PERMISSION
             );
 
+        } else if (pendingUri != null) {
+            showNameScreen();
         } else {
             showCamera();
         }
@@ -105,6 +134,14 @@ public class MainActivity extends ComponentActivity {
         if (pendingUri != null) {
             outState.putString("pending_uri", pendingUri.toString());
         }
+        if (barcodeBox != null && pendingUri != null) {
+            outState.putString("barcode_text", barcodeBox.getText().toString());
+        }
+        if (locationBox != null && pendingUri != null) {
+            outState.putString("location_text", locationBox.getText().toString());
+        }
+        outState.putString("chosen_item_code", selectedItemCode);
+        outState.putString("chosen_item_label", selectedItemLabel);
         super.onSaveInstanceState(outState);
     }
 
@@ -123,7 +160,11 @@ public class MainActivity extends ComponentActivity {
         if (requestCode == CAMERA_PERMISSION) {
             if (grantResults.length > 0 &&
                     grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                showCamera();
+                if (pendingUri != null) {
+                    showNameScreen();
+                } else {
+                    showCamera();
+                }
             } else {
                 Toast.makeText(
                         this,
@@ -137,6 +178,12 @@ public class MainActivity extends ComponentActivity {
     private void showCamera() {
 
         saving = false;
+        selectedItemCode = null;
+        selectedItemLabel = null;
+        restoredBarcode = "";
+        restoredLocation = "";
+        barcodeBox = null;
+        locationBox = null;
         hideKeyboard();
 
         LinearLayout root = new LinearLayout(this);
@@ -313,17 +360,54 @@ public class MainActivity extends ComponentActivity {
                 new LinearLayout.LayoutParams(-1, 0, 1)
         );
 
-        barcodeBox = new EditText(this);
-        barcodeBox.setHint("الباركود");
-        barcodeBox.setSingleLine(true);
-        barcodeBox.setTextSize(22);
+        // Barcode field + magnifying glass for products without barcodes.
+        LinearLayout barcodeRow = new LinearLayout(this);
+        barcodeRow.setOrientation(LinearLayout.HORIZONTAL);
+        barcodeRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        root.addView(barcodeBox);
+        barcodeBox = new EditText(this);
+        barcodeBox.setHint("الباركود (أو ابحث بالعدسة)");
+        barcodeBox.setSingleLine(true);
+        barcodeBox.setTextSize(20);
+        barcodeBox.setText(restoredBarcode);
+        barcodeRow.addView(barcodeBox,
+                new LinearLayout.LayoutParams(0, -2, 1));
+
+        Button searchButton = new Button(this);
+        searchButton.setText("🔍");
+        searchButton.setContentDescription("البحث عن صنف بالاسم");
+        searchButton.setTextSize(24);
+        searchButton.setAllCaps(false);
+        barcodeRow.addView(searchButton,
+                new LinearLayout.LayoutParams(dp(64), dp(58)));
+        root.addView(barcodeRow);
+
+        selectedProductText = new TextView(this);
+        selectedProductText.setTextSize(16);
+        selectedProductText.setPadding(dp(8), dp(5), dp(8), dp(8));
+        selectedProductText.setOnClickListener(v -> clearSelectedProduct());
+        root.addView(selectedProductText);
+        updateSelectedProductLabel();
+
+        // Typing a barcode cancels an earlier name-search selection.
+        barcodeBox.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (s.length() > 0 && selectedItemCode != null) {
+                    clearSelectedProduct();
+                }
+            }
+            @Override public void afterTextChanged(Editable s) { }
+        });
+        searchButton.setOnClickListener(v -> {
+            if (!saving) showProductSearch();
+        });
 
         locationBox = new EditText(this);
         locationBox.setHint("موقع البضاعة");
         locationBox.setSingleLine(true);
         locationBox.setTextSize(22);
+        locationBox.setText(restoredLocation);
 
         root.addView(locationBox);
 
@@ -365,7 +449,11 @@ public class MainActivity extends ComponentActivity {
 
         saveButton.setOnClickListener(v -> lookupAndSave());
 
-        barcodeBox.requestFocus();
+        if (selectedItemCode == null) {
+            barcodeBox.requestFocus();
+        } else {
+            locationBox.requestFocus();
+        }
 
         barcodeBox.postDelayed(() -> {
             InputMethodManager imm =
@@ -375,11 +463,191 @@ public class MainActivity extends ComponentActivity {
 
             if (imm != null) {
                 imm.showSoftInput(
-                        barcodeBox,
+                        selectedItemCode == null ? barcodeBox : locationBox,
                         InputMethodManager.SHOW_IMPLICIT
                 );
             }
         }, 300);
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void clearSelectedProduct() {
+        selectedItemCode = null;
+        selectedItemLabel = null;
+        updateSelectedProductLabel();
+    }
+
+    private void updateSelectedProductLabel() {
+        if (selectedProductText == null) return;
+        if (selectedItemCode == null) {
+            selectedProductText.setVisibility(View.GONE);
+        } else {
+            selectedProductText.setVisibility(View.VISIBLE);
+            selectedProductText.setText("الصنف المختار: " + selectedItemCode +
+                    "\n" + (selectedItemLabel == null ? "" : selectedItemLabel) +
+                    "\nاضغط هنا لإلغاء الاختيار");
+        }
+    }
+
+    private void showProductSearch() {
+        // Search is inside a dialog so the captured photo and shelf entry stay intact.
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        EditText searchBox = new EditText(this);
+        searchBox.setHint("ابحث باسم الصنف أو كوده...");
+        searchBox.setSingleLine(true);
+        searchBox.setTextSize(19);
+        root.addView(searchBox);
+
+        TextView message = new TextView(this);
+        message.setText("اكتب اسم الصنف، وستتحدث النتائج مع كل حرف");
+        message.setTextSize(14);
+        message.setPadding(dp(4), dp(8), dp(4), dp(8));
+        root.addView(message);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout results = new LinearLayout(this);
+        results.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(results);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, dp(370)));
+
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("بحث عن صنف 🔍")
+                .setView(root)
+                .setNegativeButton("إغلاق", (d, which) -> { })
+                .create();
+        searchDialog = dialog;
+        searchGeneration++; // cancel replies from a previous dialog
+
+        dialog.setOnDismissListener(d -> {
+            searchGeneration++;
+            if (pendingSearchTask != null) {
+                searchHandler.removeCallbacks(pendingSearchTask);
+                pendingSearchTask = null;
+            }
+            if (searchDialog == dialog) searchDialog = null;
+        });
+
+        searchBox.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable editable) {
+                String term = editable.toString().trim();
+                final int generation = ++searchGeneration;
+                if (pendingSearchTask != null) {
+                    searchHandler.removeCallbacks(pendingSearchTask);
+                }
+                results.removeAllViews();
+                if (term.isEmpty()) {
+                    message.setText("اكتب اسم الصنف للبحث");
+                    return;
+                }
+                if (term.length() > 100) {
+                    message.setText("الحد الأقصى للبحث 100 حرف");
+                    return;
+                }
+                message.setText("جاري البحث...");
+                // Live search also triggers when a character is deleted.
+                pendingSearchTask = () -> searchProductsLive(term, generation,
+                        dialog, message, results);
+                searchHandler.postDelayed(pendingSearchTask, 300);
+            }
+        });
+
+        dialog.show();
+        searchBox.requestFocus();
+        searchBox.postDelayed(() -> {
+            if (!dialog.isShowing()) return;
+            InputMethodManager imm = (InputMethodManager)
+                    getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(searchBox, InputMethodManager.SHOW_IMPLICIT);
+            }
+        }, 200);
+    }
+
+    private void searchProductsLive(String term, int generation,
+                                    AlertDialog dialog, TextView message,
+                                    LinearLayout results) {
+        new Thread(() -> {
+            JSONArray items = null;
+            String errorMessage = null;
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL(SEARCH_URL + "?q=" +
+                        URLEncoder.encode(term, "UTF-8"));
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("GET");
+                connection.setRequestProperty("X-API-Key", API_KEY);
+                connection.setConnectTimeout(7000);
+                connection.setReadTimeout(12000);
+                int httpStatus = connection.getResponseCode();
+                String body = readServerResponse(connection, httpStatus);
+                JSONObject json = new JSONObject(body);
+                if (httpStatus != 200 || !json.optBoolean("ok", false)) {
+                    throw new IOException(json.optString("error",
+                            "تعذر البحث (HTTP " + httpStatus + ")"));
+                }
+                items = json.optJSONArray("items");
+            } catch (Exception e) {
+                errorMessage = e.getMessage() != null ? e.getMessage() : "خطأ بالبحث";
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            final JSONArray foundItems = items;
+            final String finalError = errorMessage;
+            runOnUiThread(() -> {
+                // Ignore late network responses from previous keystrokes.
+                if (generation != searchGeneration ||
+                        searchDialog != dialog || !dialog.isShowing()) return;
+                results.removeAllViews();
+                if (finalError != null) {
+                    message.setText("خطأ في البحث: " + finalError);
+                    return;
+                }
+                if (foundItems == null || foundItems.length() == 0) {
+                    message.setText("لا يوجد صنف مطابق");
+                    return;
+                }
+                message.setText("عدد النتائج المعروضة: " + foundItems.length() +
+                        " (أول 30 نتيجة)");
+                for (int i = 0; i < foundItems.length(); i++) {
+                    JSONObject product = foundItems.optJSONObject(i);
+                    if (product == null) continue;
+                    String code = product.optString("item_code", "");
+                    String arName = product.optString("name_ar", "");
+                    String enName = product.optString("name_en", "");
+                    String location = product.optString("location", "");
+                    if (code.isEmpty()) continue;
+                    String label = arName.isEmpty() ? enName : arName;
+                    if (!enName.isEmpty() && !enName.equals(arName)) {
+                        label = label + "\n" + enName;
+                    }
+                    final String displayLabel = label;
+                    Button itemButton = new Button(this);
+                    itemButton.setAllCaps(false);
+                    itemButton.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+                    itemButton.setTextSize(15);
+                    itemButton.setText(code + "\n" + displayLabel +
+                            (location.isEmpty() ? "" : "\nالموقع الحالي: " + location));
+                    itemButton.setOnClickListener(v -> {
+                        selectedItemCode = code;
+                        selectedItemLabel = displayLabel;
+                        barcodeBox.setText(""); // no barcode required for a selected item
+                        updateSelectedProductLabel();
+                        dialog.dismiss();
+                        locationBox.requestFocus();
+                    });
+                    results.addView(itemButton,
+                            new LinearLayout.LayoutParams(-1, -2));
+                }
+            });
+        }).start();
     }
 
     private void lookupAndSave() {
@@ -389,11 +657,12 @@ public class MainActivity extends ComponentActivity {
         }
 
         final String barcode = barcodeBox.getText().toString().trim();
+        final String chosenItemCode = selectedItemCode;
         final String location = locationBox.getText().toString().trim();
         final Uri photoUri = pendingUri;
 
-        if (barcode.isEmpty()) {
-            barcodeBox.setError("اكتب الباركود");
+        if (barcode.isEmpty() && chosenItemCode == null) {
+            barcodeBox.setError("أدخل باركود أو اختر صنفًا من العدسة");
             barcodeBox.requestFocus();
             return;
         }
@@ -418,19 +687,22 @@ public class MainActivity extends ComponentActivity {
 
         saving = true;
         saveButton.setEnabled(false);
-        statusText.setText("جاري البحث عن كود الصنف...");
+        statusText.setText(chosenItemCode == null
+                ? "جاري البحث عن كود الصنف..." : "جاري حفظ الصنف المختار...");
 
         new Thread(() -> {
             try {
-                // First use the same barcode API as the original application.
-                String itemCode = lookupItemCode(barcode);
+                // Two supported paths: barcode lookup or direct selection by name.
+                String itemCode = chosenItemCode != null
+                        ? chosenItemCode : lookupItemCode(barcode);
 
                 runOnUiThread(() ->
                         statusText.setText("جاري رفع الصورة وتحديث موقع الصنف..."));
 
                 // One POST: server writes the image BLOB and the shelf
                 // location in a single Oracle transaction.
-                uploadPhotoToServer(barcode, itemCode, location, photoUri);
+                uploadPhotoToServer(chosenItemCode == null ? barcode : "",
+                        itemCode, location, photoUri);
 
                 // Only rename the phone's local copy after server succeeds.
                 runOnUiThread(() -> savePhoto(itemCode, location));
@@ -746,7 +1018,8 @@ public class MainActivity extends ComponentActivity {
 
     @Override
     protected void onDestroy() {
-
+        searchGeneration++;
+        if (pendingSearchTask != null) searchHandler.removeCallbacks(pendingSearchTask);
         if (cameraProvider != null) {
             cameraProvider.unbindAll();
         }
