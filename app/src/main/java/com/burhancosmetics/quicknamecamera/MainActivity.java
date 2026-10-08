@@ -518,7 +518,7 @@ savePhoto(finalItemCode, location);
         String visibleName =
                 cleanName(itemCode) + "," + cleanName(location);
 
-        String filename = getUniqueName(visibleName + ".jpg");
+        String filename = getUniqueName(visibleName);
 
         try {
             ContentValues values = new ContentValues();
@@ -590,28 +590,17 @@ savePhoto(finalItemCode, location);
 
     private String getUniqueName(String originalName) {
 
-        String base = originalName;
-        String extension = "";
+    String candidate = originalName;
+    int number = 1;
 
-        int dot = originalName.lastIndexOf(".");
-
-        if (dot > 0) {
-            base = originalName.substring(0, dot);
-            extension = originalName.substring(dot);
-        }
-
-        String candidate = base + extension;
-        int number = 1;
-
-        while (imageExists(candidate)) {
-            candidate = base +
-                    String.format(Locale.ROOT, "_%02d", number) +
-                    extension;
-            number++;
-        }
-
-        return candidate;
+    while (imageExists(candidate)) {
+        candidate = originalName +
+                String.format(Locale.ROOT, "_%02d", number);
+        number++;
     }
+
+    return candidate;
+}
 
     private boolean imageExists(String name) {
 
