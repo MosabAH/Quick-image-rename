@@ -51,7 +51,7 @@ public class MainActivity extends ComponentActivity {
             "http://192.168.1.72:5000/barcode";
 
     private static final String API_KEY =
-            "PUT_YOUR_NEW_API_KEY_HERE";
+            "123456789test";
 
     private PreviewView previewView;
     private ImageCapture imageCapture;
