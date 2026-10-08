@@ -495,7 +495,13 @@ public class MainActivity extends ComponentActivity {
                     return;
                 }
 
-                savePhoto(finalItemCode, location);
+                Toast.makeText(
+        MainActivity.this,
+        "كود الصنف من Oracle: " + finalItemCode,
+        Toast.LENGTH_LONG
+).show();
+
+savePhoto(finalItemCode, location);
             });
 
         }).start();
