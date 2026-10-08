@@ -35,11 +35,14 @@ import com.google.common.util.concurrent.ListenableFuture;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.DataOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.util.UUID;
 import java.util.Locale;
 import java.util.concurrent.Executor;
 
@@ -47,8 +50,13 @@ public class MainActivity extends ComponentActivity {
 
     private static final int CAMERA_PERMISSION = 100;
 
+    // Existing barcode lookup endpoint (keep its current behavior).
     private static final String SERVER_URL =
             "http://192.168.1.72:5000/barcode";
+
+    // New endpoint on the SAME Flask server; must be installed server-side.
+    private static final String UPLOAD_URL =
+            "http://192.168.1.72:5000/product-photo";
 
     private static final String API_KEY =
             "123456789test";
@@ -380,8 +388,9 @@ public class MainActivity extends ComponentActivity {
             return;
         }
 
-        String barcode = barcodeBox.getText().toString().trim();
-        String location = locationBox.getText().toString().trim();
+        final String barcode = barcodeBox.getText().toString().trim();
+        final String location = locationBox.getText().toString().trim();
+        final Uri photoUri = pendingUri;
 
         if (barcode.isEmpty()) {
             barcodeBox.setError("اكتب الباركود");
@@ -391,6 +400,13 @@ public class MainActivity extends ComponentActivity {
 
         if (location.isEmpty()) {
             locationBox.setError("اكتب موقع البضاعة");
+            locationBox.requestFocus();
+            return;
+        }
+
+        // The stock table column TXT_STKSHIELFCODE is VARCHAR2(20).
+        if (location.length() > 20) {
+            locationBox.setError("موقع البضاعة يجب ألا يزيد عن 20 حرفًا");
             locationBox.requestFocus();
             return;
         }
@@ -405,106 +421,163 @@ public class MainActivity extends ComponentActivity {
         statusText.setText("جاري البحث عن كود الصنف...");
 
         new Thread(() -> {
-
-            String itemCode = null;
-            String error = null;
-
-            HttpURLConnection connection = null;
-
             try {
-                String encodedBarcode =
-                        URLEncoder.encode(barcode, "UTF-8");
+                // First use the same barcode API as the original application.
+                String itemCode = lookupItemCode(barcode);
 
-                URL url = new URL(
-                        SERVER_URL + "?code=" + encodedBarcode
-                );
+                runOnUiThread(() ->
+                        statusText.setText("جاري رفع الصورة وتحديث موقع الصنف..."));
 
-                connection = (HttpURLConnection) url.openConnection();
+                // One POST: server writes the image BLOB and the shelf
+                // location in a single Oracle transaction.
+                uploadPhotoToServer(barcode, itemCode, location, photoUri);
 
-                connection.setRequestMethod("GET");
-                connection.setRequestProperty("X-API-Key", API_KEY);
-
-                connection.setConnectTimeout(7000);
-                connection.setReadTimeout(7000);
-
-                int responseCode = connection.getResponseCode();
-
-                InputStream stream =
-                        responseCode >= 200 && responseCode < 300
-                                ? connection.getInputStream()
-                                : connection.getErrorStream();
-
-                if (stream == null) {
-                    throw new Exception("Empty server response");
-                }
-
-                StringBuilder response = new StringBuilder();
-
-                try (BufferedReader reader =
-                             new BufferedReader(
-                                     new InputStreamReader(stream, "UTF-8")
-                             )) {
-
-                    String line;
-
-                    while ((line = reader.readLine()) != null) {
-                        response.append(line);
-                    }
-                }
-
-                if (responseCode == 401) {
-                    throw new Exception("مفتاح الاتصال غير صحيح");
-                }
-
-                if (responseCode != 200) {
-                    throw new Exception("Server HTTP " + responseCode);
-                }
-
-                JSONObject json = new JSONObject(response.toString());
-
-                boolean found = json.optBoolean("found", false);
-
-                if (!found) {
-                    error = "الباركود غير موجود في قاعدة البيانات";
-                } else {
-                    itemCode = json.optString("item_code", "").trim();
-
-                    if (itemCode.isEmpty()) {
-                        error = "كود الصنف فارغ";
-                    }
-                }
+                // Only rename the phone's local copy after server succeeds.
+                runOnUiThread(() -> savePhoto(itemCode, location));
 
             } catch (Exception e) {
-                error = "فشل الاتصال أو البحث: " + e.getMessage();
-
-            } finally {
-                if (connection != null) {
-                    connection.disconnect();
-                }
-            }
-
-            final String finalItemCode = itemCode;
-            final String finalError = error;
-
-            runOnUiThread(() -> {
-
-                if (finalError != null) {
+                final String message = e.getMessage() != null
+                        ? e.getMessage() : "خطأ غير معروف";
+                runOnUiThread(() -> {
                     saving = false;
                     saveButton.setEnabled(true);
-                    statusText.setText(finalError);
-                    return;
-                }
-
-                Toast.makeText(
-        MainActivity.this,
-        "كود الصنف من Oracle: " + finalItemCode,
-        Toast.LENGTH_LONG
-).show();
-
-savePhoto(finalItemCode, location);
-            });
-
+                    statusText.setText("تعذر تأكيد الحفظ؛ افحص الصنف قبل إعادة المحاولة: " + message);
+                    // Keep pendingUri so the user can retry without
+                    // re-taking the photograph.
+                });
+            }
         }).start();
+    }
+
+    private String lookupItemCode(String barcode) throws Exception {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(SERVER_URL + "?code=" +
+                    URLEncoder.encode(barcode, "UTF-8"));
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setRequestProperty("X-API-Key", API_KEY);
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(10000);
+
+            int status = connection.getResponseCode();
+            String body = readServerResponse(connection, status);
+            if (status == 401) {
+                throw new IOException("مفتاح الاتصال غير صحيح");
+            }
+            if (status != 200) {
+                throw new IOException("فشل البحث عن الباركود (HTTP " + status + ")");
+            }
+
+            JSONObject json = new JSONObject(body);
+            if (!json.optBoolean("found", false)) {
+                throw new IOException("الباركود غير موجود في قاعدة البيانات");
+            }
+            String itemCode = json.optString("item_code", "").trim();
+            if (itemCode.isEmpty()) {
+                throw new IOException("كود الصنف فارغ");
+            }
+            return itemCode;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private void uploadPhotoToServer(
+            String barcode, String itemCode, String location, Uri photoUri) throws Exception {
+
+        HttpURLConnection connection = null;
+        String boundary = "----Burhan" + UUID.randomUUID().toString().replace("-", "");
+
+        try {
+            connection = (HttpURLConnection) new URL(UPLOAD_URL).openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(60000);
+            connection.setChunkedStreamingMode(64 * 1024);
+            connection.setRequestProperty("X-API-Key", API_KEY);
+            connection.setRequestProperty("Content-Type",
+                    "multipart/form-data; boundary=" + boundary);
+
+            try (DataOutputStream out = new DataOutputStream(
+                    connection.getOutputStream())) {
+                writeFormField(out, boundary, "barcode", barcode);
+                writeFormField(out, boundary, "product_code", itemCode);
+                writeFormField(out, boundary, "location", location);
+
+                out.writeBytes("--" + boundary + "\r\n");
+                out.writeBytes("Content-Disposition: form-data; name=\"image\"; " +
+                        "filename=\"photo.jpg\"\r\n");
+                out.writeBytes("Content-Type: image/jpeg\r\n\r\n");
+
+                try (InputStream in = getContentResolver().openInputStream(photoUri)) {
+                    if (in == null) {
+                        throw new IOException("تعذر قراءة الصورة من الهاتف");
+                    }
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                }
+                out.writeBytes("\r\n--" + boundary + "--\r\n");
+            }
+
+            int status = connection.getResponseCode();
+            String body = readServerResponse(connection, status);
+            JSONObject json;
+            try {
+                json = new JSONObject(body);
+            } catch (Exception parseException) {
+                throw new IOException("رد غير مفهوم من السيرفر (HTTP " + status + ")");
+            }
+            if (status != 200 || !json.optBoolean("ok", false)) {
+                String message = json.optString("error", "HTTP " + status);
+                throw new IOException(message);
+            }
+
+            String savedCode = json.optString("product_code", "");
+            String savedLocation = json.optString("location", "");
+            if (!itemCode.equals(savedCode) || !location.equals(savedLocation)) {
+                throw new IOException("السيرفر أعاد بيانات مختلفة؛ راجع الحفظ قبل المحاولة من جديد");
+            }
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private void writeFormField(DataOutputStream out, String boundary,
+                                String name, String value) throws IOException {
+        out.writeBytes("--" + boundary + "\r\n");
+        out.writeBytes("Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n");
+        out.write(value.getBytes("UTF-8"));
+        out.writeBytes("\r\n");
+    }
+
+    private String readServerResponse(HttpURLConnection connection, int status)
+            throws IOException {
+        InputStream stream = status >= 200 && status < 400
+                ? connection.getInputStream() : connection.getErrorStream();
+        if (stream == null) {
+            throw new IOException("لا يوجد رد من السيرفر");
+        }
+        StringBuilder response = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(stream, "UTF-8"))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                response.append(line);
+                if (response.length() > 8192) {
+                    throw new IOException("رد السيرفر أطول من المتوقع");
+                }
+            }
+        }
+        return response.toString();
     }
 
     private void savePhoto(String itemCode, String location) {
@@ -518,7 +591,7 @@ savePhoto(finalItemCode, location);
         String visibleName =
                 cleanName(itemCode) + "," + cleanName(location);
 
-        String filename = getUniqueName(visibleName);
+        String filename = getUniqueName(visibleName + ".jpg");
 
         try {
             ContentValues values = new ContentValues();
@@ -560,16 +633,21 @@ savePhoto(finalItemCode, location);
 
             Toast.makeText(
                     this,
-                    "تم الحفظ: " + shownName,
-                    Toast.LENGTH_SHORT
+                    "تم حفظ الصورة والموقع على السيرفر: " + shownName,
+                    Toast.LENGTH_LONG
             ).show();
 
             showCamera();
 
         } catch (Exception e) {
+            // Upload already committed on the server. Do NOT offer a retry
+            // of the same save merely because local renaming failed.
+            Toast.makeText(this,
+                    "تم الحفظ على السيرفر، لكن تعذرت تسمية النسخة على الهاتف: "
+                            + e.getMessage(), Toast.LENGTH_LONG).show();
+            pendingUri = null;
             saving = false;
-            saveButton.setEnabled(true);
-            statusText.setText("تعذر حفظ الصورة: " + e.getMessage());
+            showCamera();
         }
     }
 
@@ -589,18 +667,18 @@ savePhoto(finalItemCode, location);
     }
 
     private String getUniqueName(String originalName) {
+        int dot = originalName.lastIndexOf('.');
+        String stem = dot > 0 ? originalName.substring(0, dot) : originalName;
+        String ext = dot > 0 ? originalName.substring(dot) : "";
 
-    String candidate = originalName;
-    int number = 1;
-
-    while (imageExists(candidate)) {
-        candidate = originalName +
-                String.format(Locale.ROOT, "_%02d", number);
-        number++;
+        String candidate = originalName;
+        int number = 1;
+        while (imageExists(candidate)) {
+            candidate = stem + String.format(Locale.ROOT, "_%02d", number) + ext;
+            number++;
+        }
+        return candidate;
     }
-
-    return candidate;
-}
 
     private boolean imageExists(String name) {
 
